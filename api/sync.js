@@ -101,13 +101,27 @@ export default async function handler(req, res) {
       return res.status(200).json({ success: true, count: 0, note: 'Tidak ada data ditemukan' });
     }
 
-    // ---------- SIMPAN KE SUPABASE (upsert, biar update kalau sudah ada) ----------
-    const { error: upsertError } = await supabaseAdmin
+    // ---------- SIMPAN KE SUPABASE ----------
+    // Hapus semua data lama dulu, lalu isi ulang dengan data terbaru dari sheet.
+    // Ini penting supaya kalau ada baris yang DIHAPUS di Google Sheets, baris itu
+    // juga ikut hilang dari aplikasi (bukan cuma nambah/update, tapi mirror persis).
+    const { error: deleteError } = await supabaseAdmin
       .from('barang_masuk')
-      .upsert(records, { onConflict: 'sheet_row_number' });
+      .delete()
+      .not('id', 'is', null);
 
-    if (upsertError) {
-      return res.status(500).json({ error: 'Gagal simpan ke Supabase', detail: upsertError.message });
+    if (deleteError) {
+      return res.status(500).json({ error: 'Gagal membersihkan data lama', detail: deleteError.message });
+    }
+
+    // Insert dalam batch (biar aman kalau datanya banyak)
+    const batchSize = 500;
+    for (let i = 0; i < records.length; i += batchSize) {
+      const batch = records.slice(i, i + batchSize);
+      const { error: insertError } = await supabaseAdmin.from('barang_masuk').insert(batch);
+      if (insertError) {
+        return res.status(500).json({ error: 'Gagal simpan ke Supabase', detail: insertError.message });
+      }
     }
 
     return res.status(200).json({ success: true, count: records.length });
