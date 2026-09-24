@@ -58,6 +58,30 @@ export default async function handler(req, res) {
     const sheetJson = await sheetRes.json();
     const rows = sheetJson.values || [];
 
+    // ---------- AMBIL WARNA CELL (Ctns, m3, Kgs) DARI GOOGLE SHEETS ----------
+    // Supaya highlight kuning/oranye di sheet ikut tampil sama di aplikasi
+    let colorRowData = [];
+    try {
+      const fmtUrl = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}?ranges=${encodeURIComponent(
+        range
+      )}&fields=sheets.data.rowData.values.userEnteredFormat.backgroundColor`;
+      const fmtRes = await fetch(fmtUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
+      if (fmtRes.ok) {
+        const fmtJson = await fmtRes.json();
+        colorRowData = fmtJson.sheets?.[0]?.data?.[0]?.rowData || [];
+      }
+    } catch (e) {
+      // kalau gagal ambil warna, lanjut aja tanpa warna (bukan error fatal)
+    }
+
+    function colorToHex(bg) {
+      if (!bg) return null;
+      const r = bg.red ?? 1, g = bg.green ?? 1, b = bg.blue ?? 1;
+      if (r > 0.97 && g > 0.97 && b > 0.97) return null; // putih/kosong = tidak dihighlight
+      const toHex = (v) => Math.round(v * 255).toString(16).padStart(2, '0');
+      return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+    }
+
     // ---------- MAPPING KOLOM + KLASIFIKASI TIPE BARIS ----------
     // BE | Marking | Customer | Description | Ctns | m3 | kgs | 进仓日期 | Total value | Partai | 到港 | 备注
     //
@@ -77,6 +101,7 @@ export default async function handler(req, res) {
     const records = rows
       .map((row, idx) => {
         const rowType = classifyRow(row);
+        const cellRow = colorRowData[idx]?.values || [];
         return {
           sheet_row_number: idx + 1,
           row_type: rowType,
@@ -92,6 +117,9 @@ export default async function handler(req, res) {
           partai: row[9] || null,
           tiba_pelabuhan: row[10] || null,
           catatan: row[11] || null,
+          ctns_color: colorToHex(cellRow[4]?.userEnteredFormat?.backgroundColor),
+          m3_color: colorToHex(cellRow[5]?.userEnteredFormat?.backgroundColor),
+          kgs_color: colorToHex(cellRow[6]?.userEnteredFormat?.backgroundColor),
           synced_at: new Date().toISOString(),
         };
       })
