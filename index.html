@@ -428,9 +428,9 @@
           <td>${esc(r.marking) || ''}</td>
           <td class="wrap"><span class="cn">${esc(r.customer) || ''}</span></td>
           <td class="wrap">${esc(r.description) || ''}</td>
-          <td>${esc(r.ctns) || ''}</td>
-          <td>${esc(r.m3) || ''}</td>
-          <td>${esc(r.kgs) || ''}</td>
+          <td${r.ctns_color ? ` style="background-color:${esc(r.ctns_color)}"` : ''}>${esc(r.ctns) || ''}</td>
+          <td${r.m3_color ? ` style="background-color:${esc(r.m3_color)}"` : ''}>${esc(r.m3) || ''}</td>
+          <td${r.kgs_color ? ` style="background-color:${esc(r.kgs_color)}"` : ''}>${esc(r.kgs) || ''}</td>
           <td>${esc(r.tanggal_masuk) || ''}</td>
           <td>${esc(r.total_value) || ''}</td>
           <td>${esc(r.partai) || ''}</td>
