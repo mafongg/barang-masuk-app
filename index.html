@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Barang Masuk</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{
+    --green:#0f7a3c;
+    --green-dark:#0a5c2c;
+    --bg:#f4f6f5;
+    --card:#ffffff;
+    --text:#1a1a1a;
+    --muted:#6b7280;
+    --border:#e2e5e3;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    background:var(--bg);
+    color:var(--text);
+  }
+  .topbar{
+    background:var(--green);
+    color:#fff;
+    padding:16px 20px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    box-shadow:0 2px 6px rgba(0,0,0,0.12);
+  }
+  .topbar h1{
+    font-size:20px;
+    margin:0;
+    font-weight:600;
+  }
+  .topbar button{
+    background:rgba(255,255,255,0.15);
+    color:#fff;
+    border:1px solid rgba(255,255,255,0.4);
+    padding:8px 14px;
+    border-radius:8px;
+    font-size:14px;
+    cursor:pointer;
+  }
+  .topbar button:hover{background:rgba(255,255,255,0.25);}
+
+  /* ---------- LOGIN ---------- */
+  #login-screen{
+    min-height:100vh;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:20px;
+  }
+  .login-box{
+    background:var(--card);
+    padding:36px 30px;
+    border-radius:16px;
+    box-shadow:0 4px 20px rgba(0,0,0,0.08);
+    width:100%;
+    max-width:360px;
+    text-align:center;
+  }
+  .login-box .icon{
+    font-size:42px;
+    margin-bottom:6px;
+  }
+  .login-box h2{
+    margin:0 0 4px;
+    font-size:22px;
+  }
+  .login-box p.sub{
+    color:var(--muted);
+    margin:0 0 22px;
+    font-size:14px;
+  }
+  .field{
+    text-align:left;
+    margin-bottom:16px;
+  }
+  .field label{
+    display:block;
+    font-size:14px;
+    font-weight:600;
+    margin-bottom:6px;
+    color:#374151;
+  }
+  .field input{
+    width:100%;
+    padding:13px 14px;
+    font-size:16px;
+    border:1.5px solid var(--border);
+    border-radius:10px;
+    outline:none;
+  }
+  .field input:focus{border-color:var(--green);}
+  .btn-primary{
+    width:100%;
+    padding:14px;
+    background:var(--green);
+    color:#fff;
+    border:none;
+    border-radius:10px;
+    font-size:16px;
+    font-weight:600;
+    cursor:pointer;
+    margin-top:4px;
+  }
+  .btn-primary:hover{background:var(--green-dark);}
+  .btn-primary:disabled{opacity:0.6;cursor:default;}
+  #login-error{
+    color:#b42318;
+    font-size:14px;
+    margin-top:12px;
+    display:none;
+  }
+
+  /* ---------- APP ---------- */
+  #app-screen{display:none;}
+  .container{
+    max-width:1100px;
+    margin:0 auto;
+    padding:20px;
+  }
+  .toolbar{
+    display:flex;
+    flex-wrap:wrap;
+    gap:10px;
+    align-items:center;
+    justify-content:space-between;
+    margin-bottom:16px;
+  }
+  .search-box{
+    flex:1;
+    min-width:220px;
+    position:relative;
+  }
+  .search-box input{
+    width:100%;
+    padding:13px 14px 13px 40px;
+    font-size:16px;
+    border:1.5px solid var(--border);
+    border-radius:10px;
+    background:#fff;
+  }
+  .search-box::before{
+    content:"🔍";
+    position:absolute;
+    left:13px;
+    top:12px;
+    font-size:16px;
+  }
+  .btn-refresh{
+    background:var(--green);
+    color:#fff;
+    border:none;
+    padding:13px 18px;
+    border-radius:10px;
+    font-size:15px;
+    font-weight:600;
+    cursor:pointer;
+    white-space:nowrap;
+    display:flex;
+    align-items:center;
+    gap:8px;
+  }
+  .btn-refresh:hover{background:var(--green-dark);}
+  .btn-refresh:disabled{opacity:0.6;cursor:default;}
+  .status-line{
+    font-size:13px;
+    color:var(--muted);
+    margin:-6px 0 14px;
+  }
+
+  /* card list, mobile-friendly (bukan tabel lebar) */
+  .card{
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:12px;
+    padding:16px 18px;
+    margin-bottom:12px;
+  }
+  .card-top{
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-start;
+    gap:10px;
+    margin-bottom:8px;
+  }
+  .card-be{
+    font-weight:700;
+    font-size:17px;
+    color:var(--green-dark);
+  }
+  .card-tanggal{
+    font-size:13px;
+    color:var(--muted);
+    white-space:nowrap;
+  }
+  .card-desc{
+    font-size:15px;
+    margin-bottom:10px;
+    line-height:1.4;
+  }
+  .card-desc .cn{color:var(--muted);font-size:13px;display:block;margin-bottom:2px;}
+  .grid-info{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(110px,1fr));
+    gap:8px 16px;
+    font-size:14px;
+  }
+  .grid-info .label{color:var(--muted);font-size:12px;display:block;}
+  .grid-info .value{font-weight:600;}
+  .card-note{
+    margin-top:10px;
+    padding-top:10px;
+    border-top:1px dashed var(--border);
+    font-size:13px;
+    color:#374151;
+  }
+  .empty-state{
+    text-align:center;
+    padding:60px 20px;
+    color:var(--muted);
+  }
+  .loading{
+    text-align:center;
+    padding:40px;
+    color:var(--muted);
+  }
+  @media(max-width:520px){
+    .topbar h1{font-size:17px;}
+    .container{padding:14px;}
+  }
+</style>
+</head>
+<body>
+
+<!-- ===================== LOGIN SCREEN ===================== -->
+<div id="login-screen">
+  <div class="login-box">
+    <div class="icon">📦</div>
+    <h2>Barang Masuk</h2>
+    <p class="sub">Masuk untuk melihat data</p>
+    <div class="field">
+      <label for="username">Username</label>
+      <input id="username" type="text" autocomplete="username" placeholder="Username">
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" placeholder="Password">
+    </div>
+    <button class="btn-primary" id="btn-login">Masuk</button>
+    <p id="login-error">Username atau password salah.</p>
+  </div>
+</div>
+
+<!-- ===================== APP SCREEN ===================== -->
+<div id="app-screen">
+  <div class="topbar">
+    <h1>📦 Barang Masuk</h1>
+    <button id="btn-logout">Keluar</button>
+  </div>
+  <div class="container">
+    <div class="toolbar">
+      <div class="search-box">
+        <input id="search" type="text" placeholder="Cari kode BE atau nama barang...">
+      </div>
+      <button class="btn-refresh" id="btn-refresh">🔄 Refresh Data</button>
+    </div>
+    <div class="status-line" id="status-line">Memuat data...</div>
+    <div id="list-container"></div>
+  </div>
+</div>
+
+<script>
+  // ---------- KONFIGURASI SUPABASE ----------
+  const SUPABASE_URL = "https://wctihclgcakqcjiagnzl.supabase.co";
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndjdGloY2xnY2FrcWNqaWFnbnpsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAwODc3ODksImV4cCI6MjEwNTY2Mzc4OX0.dwheQjxOoDbzIzlbCQ3wXY0qb7f5OQKkwBpcw9m5Gos";
+  const EMAIL_DOMAIN = "barangmasuk.local"; // username diubah jadi username@barangmasuk.local di belakang layar
+
+  const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  let allRows = [];
+
+  const loginScreen = document.getElementById('login-screen');
+  const appScreen = document.getElementById('app-screen');
+  const loginError = document.getElementById('login-error');
+
+  function esc(str){
+    if(str === null || str === undefined) return '';
+    return String(str).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  }
+
+  // ---------- LOGIN ----------
+  document.getElementById('btn-login').addEventListener('click', doLogin);
+  document.getElementById('password').addEventListener('keydown', e => { if(e.key === 'Enter') doLogin(); });
+
+  async function doLogin(){
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value;
+    if(!username || !password) return;
+    const btn = document.getElementById('btn-login');
+    btn.disabled = true;
+    btn.textContent = 'Memeriksa...';
+    loginError.style.display = 'none';
+
+    const email = username.toLowerCase() + '@' + EMAIL_DOMAIN;
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+
+    btn.disabled = false;
+    btn.textContent = 'Masuk';
+
+    if(error){
+      loginError.style.display = 'block';
+      return;
+    }
+    showApp();
+  }
+
+  document.getElementById('btn-logout').addEventListener('click', async () => {
+    await supabase.auth.signOut();
+    location.reload();
+  });
+
+  // ---------- CEK SESI SAAT BUKA HALAMAN ----------
+  async function init(){
+    const { data: { session } } = await supabase.auth.getSession();
+    if(session){
+      showApp();
+    }
+  }
+
+  function showApp(){
+    loginScreen.style.display = 'none';
+    appScreen.style.display = 'block';
+    loadData();
+  }
+
+  // ---------- LOAD DATA ----------
+  async function loadData(){
+    const statusLine = document.getElementById('status-line');
+    statusLine.textContent = 'Memuat data...';
+    const { data, error } = await supabase
+      .from('barang_masuk')
+      .select('*')
+      .order('sheet_row_number', { ascending: false });
+
+    if(error){
+      statusLine.textContent = 'Gagal memuat data: ' + error.message;
+      return;
+    }
+    allRows = data || [];
+    renderList(allRows);
+    updateStatus();
+  }
+
+  function updateStatus(){
+    const statusLine = document.getElementById('status-line');
+    if(allRows.length === 0){
+      statusLine.textContent = 'Belum ada data.';
+      return;
+    }
+    const latest = allRows.reduce((a,b) => {
+      const ta = a.synced_at ? new Date(a.synced_at).getTime() : 0;
+      const tb = b.synced_at ? new Date(b.synced_at).getTime() : 0;
+      return tb > ta ? b : a;
+    });
+    const total = allRows.length;
+    let syncedText = '';
+    if(latest && latest.synced_at){
+      const d = new Date(latest.synced_at);
+      syncedText = ' • Terakhir sync: ' + d.toLocaleString('id-ID');
+    }
+    statusLine.textContent = total + ' data' + syncedText;
+  }
+
+  function renderList(rows){
+    const container = document.getElementById('list-container');
+    if(rows.length === 0){
+      container.innerHTML = '<div class="empty-state">Tidak ada data yang cocok.</div>';
+      return;
+    }
+    container.innerHTML = rows.map(r => `
+      <div class="card">
+        <div class="card-top">
+          <div class="card-be">${esc(r.be) || '-'}</div>
+          <div class="card-tanggal">${esc(r.tanggal_masuk) || ''}</div>
+        </div>
+        <div class="card-desc">
+          ${r.customer ? `<span class="cn">${esc(r.customer)}</span>` : ''}
+          ${esc(r.description) || ''}
+        </div>
+        <div class="grid-info">
+          <div><span class="label">Marking</span><span class="value">${esc(r.marking) || '-'}</span></div>
+          <div><span class="label">Ctns</span><span class="value">${esc(r.ctns) || '-'}</span></div>
+          <div><span class="label">m3</span><span class="value">${esc(r.m3) || '-'}</span></div>
+          <div><span class="label">Kgs</span><span class="value">${esc(r.kgs) || '-'}</span></div>
+          <div><span class="label">Total Value</span><span class="value">${esc(r.total_value) || '-'}</span></div>
+          <div><span class="label">Partai</span><span class="value">${esc(r.partai) || '-'}</span></div>
+        </div>
+        ${(r.tiba_pelabuhan || r.catatan) ? `
+        <div class="card-note">
+          ${r.tiba_pelabuhan ? `📍 ${esc(r.tiba_pelabuhan)}` : ''}
+          ${r.tiba_pelabuhan && r.catatan ? ' &nbsp;•&nbsp; ' : ''}
+          ${r.catatan ? `📝 ${esc(r.catatan)}` : ''}
+        </div>` : ''}
+      </div>
+    `).join('');
+  }
+
+  // ---------- PENCARIAN ----------
+  document.getElementById('search').addEventListener('input', (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    if(!q){ renderList(allRows); return; }
+    const filtered = allRows.filter(r => {
+      return Object.values(r).some(v => String(v || '').toLowerCase().includes(q));
+    });
+    renderList(filtered);
+  });
+
+  // ---------- REFRESH MANUAL (panggil sync dari Google Sheet) ----------
+  document.getElementById('btn-refresh').addEventListener('click', async () => {
+    const btn = document.getElementById('btn-refresh');
+    const statusLine = document.getElementById('status-line');
+    btn.disabled = true;
+    btn.textContent = '🔄 Menyinkronkan...';
+    statusLine.textContent = 'Mengambil data terbaru dari Google Sheets...';
+
+    try{
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + session.access_token }
+      });
+      const result = await res.json();
+      if(!res.ok){
+        statusLine.textContent = 'Gagal sync: ' + (result.error || 'unknown error');
+      } else {
+        await loadData();
+      }
+    } catch(err){
+      statusLine.textContent = 'Gagal sync: ' + err.message;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '🔄 Refresh Data';
+    }
+  });
+
+  init();
+</script>
+</body>
+</html>

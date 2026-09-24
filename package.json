@@ -1,0 +1,10 @@
+{
+  "name": "barang-masuk-app",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "google-auth-library": "^9.14.1",
+    "@supabase/supabase-js": "^2.45.4"
+  }
+}
