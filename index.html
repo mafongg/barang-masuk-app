@@ -175,51 +175,48 @@
     margin:-6px 0 14px;
   }
 
-  /* card list, mobile-friendly (bukan tabel lebar) */
-  .card{
+  /* ---------- TABEL ALA SPREADSHEET ---------- */
+  .table-wrap{
     background:var(--card);
     border:1px solid var(--border);
     border-radius:12px;
-    padding:16px 18px;
-    margin-bottom:12px;
+    overflow-x:auto;
+    -webkit-overflow-scrolling:touch;
   }
-  .card-top{
-    display:flex;
-    justify-content:space-between;
-    align-items:flex-start;
-    gap:10px;
-    margin-bottom:8px;
-  }
-  .card-be{
-    font-weight:700;
-    font-size:17px;
-    color:var(--green-dark);
-  }
-  .card-tanggal{
-    font-size:13px;
-    color:var(--muted);
-    white-space:nowrap;
-  }
-  .card-desc{
-    font-size:15px;
-    margin-bottom:10px;
-    line-height:1.4;
-  }
-  .card-desc .cn{color:var(--muted);font-size:13px;display:block;margin-bottom:2px;}
-  .grid-info{
-    display:grid;
-    grid-template-columns:repeat(auto-fit,minmax(110px,1fr));
-    gap:8px 16px;
+  table.sheet{
+    border-collapse:collapse;
+    width:100%;
+    min-width:1100px;
     font-size:14px;
   }
-  .grid-info .label{color:var(--muted);font-size:12px;display:block;}
-  .grid-info .value{font-weight:600;}
-  .card-note{
-    margin-top:10px;
-    padding-top:10px;
-    border-top:1px dashed var(--border);
-    font-size:13px;
-    color:#374151;
+  table.sheet thead th{
+    background:var(--green);
+    color:#fff;
+    text-align:left;
+    padding:10px 12px;
+    font-weight:600;
+    white-space:nowrap;
+    position:sticky;
+    top:0;
+  }
+  table.sheet tbody td{
+    padding:9px 12px;
+    border-bottom:1px solid var(--border);
+    vertical-align:top;
+    white-space:nowrap;
+  }
+  table.sheet tbody td.wrap{
+    white-space:normal;
+    min-width:160px;
+  }
+  table.sheet tbody tr:nth-child(even){background:#fafbfa;}
+  table.sheet tbody tr:hover{background:#eef7f0;}
+  td.be{font-weight:700;color:var(--green-dark);}
+  td.cn{color:var(--muted);font-size:12.5px;display:block;}
+  .scroll-hint{
+    font-size:12px;
+    color:var(--muted);
+    margin:6px 2px 12px;
   }
   .empty-state{
     text-align:center;
@@ -272,6 +269,7 @@
       <button class="btn-refresh" id="btn-refresh">🔄 Refresh Data</button>
     </div>
     <div class="status-line" id="status-line">Memuat data...</div>
+    <div class="scroll-hint">👉 Geser tabel ke samping untuk lihat semua kolom</div>
     <div id="list-container"></div>
   </div>
 </div>
@@ -384,32 +382,46 @@
       container.innerHTML = '<div class="empty-state">Tidak ada data yang cocok.</div>';
       return;
     }
-    container.innerHTML = rows.map(r => `
-      <div class="card">
-        <div class="card-top">
-          <div class="card-be">${esc(r.be) || '-'}</div>
-          <div class="card-tanggal">${esc(r.tanggal_masuk) || ''}</div>
-        </div>
-        <div class="card-desc">
-          ${r.customer ? `<span class="cn">${esc(r.customer)}</span>` : ''}
-          ${esc(r.description) || ''}
-        </div>
-        <div class="grid-info">
-          <div><span class="label">Marking</span><span class="value">${esc(r.marking) || '-'}</span></div>
-          <div><span class="label">Ctns</span><span class="value">${esc(r.ctns) || '-'}</span></div>
-          <div><span class="label">m3</span><span class="value">${esc(r.m3) || '-'}</span></div>
-          <div><span class="label">Kgs</span><span class="value">${esc(r.kgs) || '-'}</span></div>
-          <div><span class="label">Total Value</span><span class="value">${esc(r.total_value) || '-'}</span></div>
-          <div><span class="label">Partai</span><span class="value">${esc(r.partai) || '-'}</span></div>
-        </div>
-        ${(r.tiba_pelabuhan || r.catatan) ? `
-        <div class="card-note">
-          ${r.tiba_pelabuhan ? `📍 ${esc(r.tiba_pelabuhan)}` : ''}
-          ${r.tiba_pelabuhan && r.catatan ? ' &nbsp;•&nbsp; ' : ''}
-          ${r.catatan ? `📝 ${esc(r.catatan)}` : ''}
-        </div>` : ''}
-      </div>
+    const bodyRows = rows.map(r => `
+      <tr>
+        <td class="be">${esc(r.be) || '-'}</td>
+        <td>${esc(r.marking) || ''}</td>
+        <td class="wrap"><span class="cn">${esc(r.customer) || ''}</span></td>
+        <td class="wrap">${esc(r.description) || ''}</td>
+        <td>${esc(r.ctns) || ''}</td>
+        <td>${esc(r.m3) || ''}</td>
+        <td>${esc(r.kgs) || ''}</td>
+        <td>${esc(r.tanggal_masuk) || ''}</td>
+        <td>${esc(r.total_value) || ''}</td>
+        <td>${esc(r.partai) || ''}</td>
+        <td class="wrap">${esc(r.tiba_pelabuhan) || ''}</td>
+        <td class="wrap">${esc(r.catatan) || ''}</td>
+      </tr>
     `).join('');
+
+    container.innerHTML = `
+      <div class="table-wrap">
+        <table class="sheet">
+          <thead>
+            <tr>
+              <th>BE</th>
+              <th>Marking</th>
+              <th>Customer</th>
+              <th>Description</th>
+              <th>Ctns</th>
+              <th>m3</th>
+              <th>Kgs</th>
+              <th>进仓日期</th>
+              <th>Total Value</th>
+              <th>Partai</th>
+              <th>到港</th>
+              <th>备注</th>
+            </tr>
+          </thead>
+          <tbody>${bodyRows}</tbody>
+        </table>
+      </div>
+    `;
   }
 
   // ---------- PENCARIAN ----------
