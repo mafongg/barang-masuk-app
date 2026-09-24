@@ -58,26 +58,44 @@ export default async function handler(req, res) {
     const sheetJson = await sheetRes.json();
     const rows = sheetJson.values || [];
 
-    // ---------- MAPPING KOLOM (sesuai urutan kolom sheet PELABUHAN KECIL) ----------
+    // ---------- MAPPING KOLOM + KLASIFIKASI TIPE BARIS ----------
     // BE | Marking | Customer | Description | Ctns | m3 | kgs | 进仓日期 | Total value | Partai | 到港 | 备注
+    //
+    // Sheet ini punya 3 jenis baris:
+    // 1. "section"  -> baris judul pemisah section (cuma kolom A ada isinya, sisanya kosong), misal "PELABUHAN BESAR"
+    // 2. "header"   -> baris header yang diulang di tengah data (kolom A persis "BE"), misal saat mulai section baru
+    // 3. "data"     -> baris barang beneran
+    function classifyRow(row) {
+      const colA = (row[0] || '').toString().trim();
+      const restEmpty = row.slice(1, 12).every((v) => !v || v.toString().trim() === '');
+      if (colA && restEmpty) return 'section';
+      if (colA.toUpperCase() === 'BE') return 'header';
+      if (!colA) return 'empty';
+      return 'data';
+    }
+
     const records = rows
-      .map((row, idx) => ({
-        sheet_row_number: idx + 1,
-        be: row[0] || null,
-        marking: row[1] || null,
-        customer: row[2] || null,
-        description: row[3] || null,
-        ctns: row[4] || null,
-        m3: row[5] || null,
-        kgs: row[6] || null,
-        tanggal_masuk: row[7] || null,
-        total_value: row[8] || null,
-        partai: row[9] || null,
-        tiba_pelabuhan: row[10] || null,
-        catatan: row[11] || null,
-        synced_at: new Date().toISOString(),
-      }))
-      .filter((r) => r.be); // lewati baris yang benar-benar kosong
+      .map((row, idx) => {
+        const rowType = classifyRow(row);
+        return {
+          sheet_row_number: idx + 1,
+          row_type: rowType,
+          be: row[0] || null,
+          marking: row[1] || null,
+          customer: row[2] || null,
+          description: row[3] || null,
+          ctns: row[4] || null,
+          m3: row[5] || null,
+          kgs: row[6] || null,
+          tanggal_masuk: row[7] || null,
+          total_value: row[8] || null,
+          partai: row[9] || null,
+          tiba_pelabuhan: row[10] || null,
+          catatan: row[11] || null,
+          synced_at: new Date().toISOString(),
+        };
+      })
+      .filter((r) => r.row_type !== 'empty');
 
     if (records.length === 0) {
       return res.status(200).json({ success: true, count: 0, note: 'Tidak ada data ditemukan' });
