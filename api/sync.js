@@ -43,8 +43,13 @@ export default async function handler(req, res) {
     const accessToken = tokenResponse.token || tokenResponse;
 
     const sheetId = process.env.GOOGLE_SHEET_ID;
-    const range = process.env.GOOGLE_SHEET_RANGE || 'A4:M10000';
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(range)}`;
+    const range = process.env.GOOGLE_SHEET_RANGE || 'A1:M100000';
+
+    // Satu API call aja yang ambil TEKS dan WARNA sekaligus per cell, biar index-nya
+    // dijamin selalu sinkron (sebelumnya pakai 2 call terpisah dan itu bisa geser/salah pasang).
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}?ranges=${encodeURIComponent(
+      range
+    )}&fields=sheets.data.rowData.values(formattedValue,userEnteredFormat.backgroundColor)`;
 
     const sheetRes = await fetch(url, {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -56,22 +61,10 @@ export default async function handler(req, res) {
     }
 
     const sheetJson = await sheetRes.json();
-    const rows = sheetJson.values || [];
+    const rowDataRaw = sheetJson.sheets?.[0]?.data?.[0]?.rowData || [];
 
-    // ---------- AMBIL WARNA CELL (Ctns, m3, Kgs) DARI GOOGLE SHEETS ----------
-    // Supaya highlight kuning/oranye di sheet ikut tampil sama di aplikasi
-    let colorRowData = [];
-    try {
-      const fmtUrl = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}?ranges=${encodeURIComponent(
-        range
-      )}&fields=sheets.data.rowData.values.userEnteredFormat.backgroundColor`;
-      const fmtRes = await fetch(fmtUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
-      if (fmtRes.ok) {
-        const fmtJson = await fmtRes.json();
-        colorRowData = fmtJson.sheets?.[0]?.data?.[0]?.rowData || [];
-      }
-    } catch (e) {
-      // kalau gagal ambil warna, lanjut aja tanpa warna (bukan error fatal)
+    function cellText(cell) {
+      return cell && cell.formattedValue !== undefined ? cell.formattedValue : null;
     }
 
     function colorToHex(bg) {
@@ -81,6 +74,12 @@ export default async function handler(req, res) {
       const toHex = (v) => Math.round(v * 255).toString(16).padStart(2, '0');
       return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
     }
+
+    // rows: array of array of text (persis posisi kolom A..M), sejajar dengan rowDataRaw
+    const rows = rowDataRaw.map((rd) => {
+      const cells = rd.values || [];
+      return Array.from({ length: 12 }, (_, i) => cellText(cells[i]));
+    });
 
     // ---------- MAPPING KOLOM + KLASIFIKASI TIPE BARIS ----------
     // BE | Marking | Customer | Description | Ctns | m3 | kgs | 进仓日期 | Total value | Partai | 到港 | 备注
@@ -101,7 +100,7 @@ export default async function handler(req, res) {
     const records = rows
       .map((row, idx) => {
         const rowType = classifyRow(row);
-        const cellRow = colorRowData[idx]?.values || [];
+        const cells = rowDataRaw[idx]?.values || [];
         return {
           sheet_row_number: idx + 1,
           row_type: rowType,
@@ -117,9 +116,9 @@ export default async function handler(req, res) {
           partai: row[9] || null,
           tiba_pelabuhan: row[10] || null,
           catatan: row[11] || null,
-          ctns_color: colorToHex(cellRow[4]?.userEnteredFormat?.backgroundColor),
-          m3_color: colorToHex(cellRow[5]?.userEnteredFormat?.backgroundColor),
-          kgs_color: colorToHex(cellRow[6]?.userEnteredFormat?.backgroundColor),
+          ctns_color: colorToHex(cells[4]?.userEnteredFormat?.backgroundColor),
+          m3_color: colorToHex(cells[5]?.userEnteredFormat?.backgroundColor),
+          kgs_color: colorToHex(cells[6]?.userEnteredFormat?.backgroundColor),
           synced_at: new Date().toISOString(),
         };
       })
