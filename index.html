@@ -177,42 +177,61 @@
 
   /* ---------- TABEL ALA SPREADSHEET ---------- */
   .table-wrap{
-    background:var(--card);
-    border:1px solid var(--border);
-    border-radius:12px;
+    background:#fff;
+    border:1px solid #b7b7b7;
+    border-radius:4px;
     overflow-x:auto;
     -webkit-overflow-scrolling:touch;
   }
   table.sheet{
     border-collapse:collapse;
     width:100%;
-    min-width:1100px;
-    font-size:14px;
+    min-width:1150px;
+    font-size:13px;
+    font-family:Arial,Helvetica,sans-serif;
   }
   table.sheet thead th{
-    background:var(--green);
-    color:#fff;
+    background:#f8f9fa;
+    color:#1a1a1a;
     text-align:left;
-    padding:10px 12px;
-    font-weight:600;
+    padding:6px 8px;
+    font-weight:700;
     white-space:nowrap;
+    border:1px solid #b7b7b7;
     position:sticky;
     top:0;
   }
   table.sheet tbody td{
-    padding:9px 12px;
-    border-bottom:1px solid var(--border);
+    padding:5px 8px;
+    border:1px solid #d0d0d0;
     vertical-align:top;
     white-space:nowrap;
   }
   table.sheet tbody td.wrap{
     white-space:normal;
-    min-width:160px;
+    min-width:150px;
   }
-  table.sheet tbody tr:nth-child(even){background:#fafbfa;}
-  table.sheet tbody tr:hover{background:#eef7f0;}
+  table.sheet tbody tr.row-data:hover{background:#eef7f0;}
   td.be{font-weight:700;color:var(--green-dark);}
-  td.cn{color:var(--muted);font-size:12.5px;display:block;}
+  td.cn{color:var(--muted);font-size:12px;display:block;}
+
+  /* baris section (judul pemisah, mis. "PELABUHAN BESAR") */
+  tr.row-section td{
+    background:#0f7a3c;
+    color:#fff;
+    font-weight:700;
+    font-size:13.5px;
+    padding:7px 10px;
+    border:1px solid #0a5c2c;
+  }
+  /* baris header ulangan di tengah data */
+  tr.row-header td{
+    background:#dbe9df;
+    color:#0a5c2c;
+    font-weight:700;
+    border:1px solid #b7b7b7;
+  }
+
   .scroll-hint{
     font-size:12px;
     color:var(--muted);
@@ -345,7 +364,7 @@
     const { data, error } = await supabaseClient
       .from('barang_masuk')
       .select('*')
-      .order('sheet_row_number', { ascending: false });
+      .order('sheet_row_number', { ascending: true });
 
     if(error){
       statusLine.textContent = 'Gagal memuat data: ' + error.message;
@@ -382,22 +401,43 @@
       container.innerHTML = '<div class="empty-state">Tidak ada data yang cocok.</div>';
       return;
     }
-    const bodyRows = rows.map(r => `
-      <tr>
-        <td class="be">${esc(r.be) || '-'}</td>
-        <td>${esc(r.marking) || ''}</td>
-        <td class="wrap"><span class="cn">${esc(r.customer) || ''}</span></td>
-        <td class="wrap">${esc(r.description) || ''}</td>
-        <td>${esc(r.ctns) || ''}</td>
-        <td>${esc(r.m3) || ''}</td>
-        <td>${esc(r.kgs) || ''}</td>
-        <td>${esc(r.tanggal_masuk) || ''}</td>
-        <td>${esc(r.total_value) || ''}</td>
-        <td>${esc(r.partai) || ''}</td>
-        <td class="wrap">${esc(r.tiba_pelabuhan) || ''}</td>
-        <td class="wrap">${esc(r.catatan) || ''}</td>
-      </tr>
-    `).join('');
+    const bodyRows = rows.map(r => {
+      if(r.row_type === 'section'){
+        return `<tr class="row-section"><td colspan="12">${esc(r.be)}</td></tr>`;
+      }
+      if(r.row_type === 'header'){
+        return `
+          <tr class="row-header">
+            <td>${esc(r.be)}</td>
+            <td>${esc(r.marking)}</td>
+            <td>${esc(r.customer)}</td>
+            <td>${esc(r.description)}</td>
+            <td>${esc(r.ctns)}</td>
+            <td>${esc(r.m3)}</td>
+            <td>${esc(r.kgs)}</td>
+            <td>${esc(r.tanggal_masuk)}</td>
+            <td>${esc(r.total_value)}</td>
+            <td>${esc(r.partai)}</td>
+            <td>${esc(r.tiba_pelabuhan)}</td>
+            <td>${esc(r.catatan)}</td>
+          </tr>`;
+      }
+      return `
+        <tr class="row-data">
+          <td class="be">${esc(r.be) || '-'}</td>
+          <td>${esc(r.marking) || ''}</td>
+          <td class="wrap"><span class="cn">${esc(r.customer) || ''}</span></td>
+          <td class="wrap">${esc(r.description) || ''}</td>
+          <td>${esc(r.ctns) || ''}</td>
+          <td>${esc(r.m3) || ''}</td>
+          <td>${esc(r.kgs) || ''}</td>
+          <td>${esc(r.tanggal_masuk) || ''}</td>
+          <td>${esc(r.total_value) || ''}</td>
+          <td>${esc(r.partai) || ''}</td>
+          <td class="wrap">${esc(r.tiba_pelabuhan) || ''}</td>
+          <td class="wrap">${esc(r.catatan) || ''}</td>
+        </tr>`;
+    }).join('');
 
     container.innerHTML = `
       <div class="table-wrap">
