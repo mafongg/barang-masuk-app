@@ -1,158 +1,492 @@
-import { GoogleAuth } from 'google-auth-library';
-import { createClient } from '@supabase/supabase-js';
-
-export default async function handler(req, res) {
-  try {
-    // ---------- OTORISASI ----------
-    // Boleh dipanggil oleh Vercel Cron (header khusus) ATAU oleh user yang sudah login (bawa token Supabase)
-    const isCron = req.headers['x-vercel-cron'] !== undefined;
-
-    const supabaseAdmin = createClient(
-      process.env.SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_ROLE_KEY
-    );
-
-    if (!isCron) {
-      const authHeader = req.headers['authorization'] || '';
-      const token = authHeader.replace('Bearer ', '');
-      if (!token) {
-        return res.status(401).json({ error: 'Tidak ada token, harus login dulu' });
-      }
-      const { data: userData, error: userError } = await supabaseAdmin.auth.getUser(token);
-      if (userError || !userData?.user) {
-        return res.status(401).json({ error: 'Token tidak valid, silakan login ulang' });
-      }
-    }
-
-    // ---------- AMBIL DATA DARI GOOGLE SHEETS ----------
-    const privateKeyRaw = process.env.GOOGLE_PRIVATE_KEY || '';
-    const privateKey = privateKeyRaw.includes('\\n')
-      ? privateKeyRaw.replace(/\\n/g, '\n')
-      : privateKeyRaw;
-
-    const auth = new GoogleAuth({
-      credentials: {
-        client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-        private_key: privateKey,
-      },
-      scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
-    });
-
-    const client = await auth.getClient();
-    const tokenResponse = await client.getAccessToken();
-    const accessToken = tokenResponse.token || tokenResponse;
-
-    const sheetId = process.env.GOOGLE_SHEET_ID;
-    const range = process.env.GOOGLE_SHEET_RANGE || 'A1:M100000';
-
-    // Satu API call aja yang ambil TEKS dan WARNA sekaligus per cell, biar index-nya
-    // dijamin selalu sinkron (sebelumnya pakai 2 call terpisah dan itu bisa geser/salah pasang).
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}?ranges=${encodeURIComponent(
-      range
-    )}&fields=sheets.data.rowData.values(formattedValue,userEnteredFormat.backgroundColor)`;
-
-    const sheetRes = await fetch(url, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-
-    if (!sheetRes.ok) {
-      const detail = await sheetRes.text();
-      return res.status(500).json({ error: 'Gagal ambil data dari Google Sheets', detail });
-    }
-
-    const sheetJson = await sheetRes.json();
-    const rowDataRaw = sheetJson.sheets?.[0]?.data?.[0]?.rowData || [];
-
-    function cellText(cell) {
-      return cell && cell.formattedValue !== undefined ? cell.formattedValue : null;
-    }
-
-    function colorToHex(bg) {
-      if (!bg) return null;
-      const r = bg.red ?? 1, g = bg.green ?? 1, b = bg.blue ?? 1;
-      if (r > 0.97 && g > 0.97 && b > 0.97) return null; // putih/kosong = tidak dihighlight
-      const toHex = (v) => Math.round(v * 255).toString(16).padStart(2, '0');
-      return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
-    }
-
-    // rows: array of array of text (persis posisi kolom A..M), sejajar dengan rowDataRaw
-    const rows = rowDataRaw.map((rd) => {
-      const cells = rd.values || [];
-      return Array.from({ length: 12 }, (_, i) => cellText(cells[i]));
-    });
-
-    // ---------- MAPPING KOLOM + KLASIFIKASI TIPE BARIS ----------
-    // BE | Marking | Customer | Description | Ctns | m3 | kgs | 进仓日期 | Total value | Partai | 到港 | 备注
-    //
-    // Sheet ini punya 3 jenis baris:
-    // 1. "section"  -> baris judul pemisah section (cuma kolom A ada isinya, sisanya kosong), misal "PELABUHAN BESAR"
-    // 2. "header"   -> baris header yang diulang di tengah data (kolom A persis "BE"), misal saat mulai section baru
-    // 3. "data"     -> baris barang beneran
-    function classifyRow(row) {
-      const colA = (row[0] || '').toString().trim();
-      const restEmpty = row.slice(1, 12).every((v) => !v || v.toString().trim() === '');
-      if (colA && restEmpty) return 'section';
-      if (colA.toUpperCase() === 'BE') return 'header';
-      if (!colA) return 'empty';
-      return 'data';
-    }
-
-    const records = rows
-      .map((row, idx) => {
-        const rowType = classifyRow(row);
-        const cells = rowDataRaw[idx]?.values || [];
-        return {
-          sheet_row_number: idx + 1,
-          row_type: rowType,
-          be: row[0] || null,
-          marking: row[1] || null,
-          customer: row[2] || null,
-          description: row[3] || null,
-          ctns: row[4] || null,
-          m3: row[5] || null,
-          kgs: row[6] || null,
-          tanggal_masuk: row[7] || null,
-          total_value: row[8] || null,
-          partai: row[9] || null,
-          tiba_pelabuhan: row[10] || null,
-          catatan: row[11] || null,
-          ctns_color: colorToHex(cells[4]?.userEnteredFormat?.backgroundColor),
-          m3_color: colorToHex(cells[5]?.userEnteredFormat?.backgroundColor),
-          kgs_color: colorToHex(cells[6]?.userEnteredFormat?.backgroundColor),
-          synced_at: new Date().toISOString(),
-        };
-      })
-      .filter((r) => r.row_type !== 'empty');
-
-    if (records.length === 0) {
-      return res.status(200).json({ success: true, count: 0, note: 'Tidak ada data ditemukan' });
-    }
-
-    // ---------- SIMPAN KE SUPABASE ----------
-    // Hapus semua data lama dulu, lalu isi ulang dengan data terbaru dari sheet.
-    // Ini penting supaya kalau ada baris yang DIHAPUS di Google Sheets, baris itu
-    // juga ikut hilang dari aplikasi (bukan cuma nambah/update, tapi mirror persis).
-    const { error: deleteError } = await supabaseAdmin
-      .from('barang_masuk')
-      .delete()
-      .not('id', 'is', null);
-
-    if (deleteError) {
-      return res.status(500).json({ error: 'Gagal membersihkan data lama', detail: deleteError.message });
-    }
-
-    // Insert dalam batch (biar aman kalau datanya banyak)
-    const batchSize = 500;
-    for (let i = 0; i < records.length; i += batchSize) {
-      const batch = records.slice(i, i + batchSize);
-      const { error: insertError } = await supabaseAdmin.from('barang_masuk').insert(batch);
-      if (insertError) {
-        return res.status(500).json({ error: 'Gagal simpan ke Supabase', detail: insertError.message });
-      }
-    }
-
-    return res.status(200).json({ success: true, count: records.length });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Barang Masuk</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{
+    --green:#0f7a3c;
+    --green-dark:#0a5c2c;
+    --bg:#f4f6f5;
+    --card:#ffffff;
+    --text:#1a1a1a;
+    --muted:#6b7280;
+    --border:#e2e5e3;
   }
-}
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    background:var(--bg);
+    color:var(--text);
+  }
+  .topbar{
+    background:var(--green);
+    color:#fff;
+    padding:16px 20px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    box-shadow:0 2px 6px rgba(0,0,0,0.12);
+  }
+  .topbar h1{
+    font-size:20px;
+    margin:0;
+    font-weight:600;
+  }
+  .topbar button{
+    background:rgba(255,255,255,0.15);
+    color:#fff;
+    border:1px solid rgba(255,255,255,0.4);
+    padding:8px 14px;
+    border-radius:8px;
+    font-size:14px;
+    cursor:pointer;
+  }
+  .topbar button:hover{background:rgba(255,255,255,0.25);}
+
+  /* ---------- LOGIN ---------- */
+  #login-screen{
+    min-height:100vh;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:20px;
+  }
+  .login-box{
+    background:var(--card);
+    padding:36px 30px;
+    border-radius:16px;
+    box-shadow:0 4px 20px rgba(0,0,0,0.08);
+    width:100%;
+    max-width:360px;
+    text-align:center;
+  }
+  .login-box .icon{
+    font-size:42px;
+    margin-bottom:6px;
+  }
+  .login-box h2{
+    margin:0 0 4px;
+    font-size:22px;
+  }
+  .login-box p.sub{
+    color:var(--muted);
+    margin:0 0 22px;
+    font-size:14px;
+  }
+  .field{
+    text-align:left;
+    margin-bottom:16px;
+  }
+  .field label{
+    display:block;
+    font-size:14px;
+    font-weight:600;
+    margin-bottom:6px;
+    color:#374151;
+  }
+  .field input{
+    width:100%;
+    padding:13px 14px;
+    font-size:16px;
+    border:1.5px solid var(--border);
+    border-radius:10px;
+    outline:none;
+  }
+  .field input:focus{border-color:var(--green);}
+  .btn-primary{
+    width:100%;
+    padding:14px;
+    background:var(--green);
+    color:#fff;
+    border:none;
+    border-radius:10px;
+    font-size:16px;
+    font-weight:600;
+    cursor:pointer;
+    margin-top:4px;
+  }
+  .btn-primary:hover{background:var(--green-dark);}
+  .btn-primary:disabled{opacity:0.6;cursor:default;}
+  #login-error{
+    color:#b42318;
+    font-size:14px;
+    margin-top:12px;
+    display:none;
+  }
+
+  /* ---------- APP ---------- */
+  #app-screen{display:none;}
+  .container{
+    max-width:100%;
+    margin:0 auto;
+    padding:16px 20px;
+  }
+  .toolbar{
+    display:flex;
+    flex-wrap:wrap;
+    gap:10px;
+    align-items:center;
+    justify-content:space-between;
+    margin-bottom:16px;
+  }
+  .search-box{
+    flex:1;
+    min-width:220px;
+    position:relative;
+  }
+  .search-box input{
+    width:100%;
+    padding:13px 14px 13px 40px;
+    font-size:16px;
+    border:1.5px solid var(--border);
+    border-radius:10px;
+    background:#fff;
+  }
+  .search-box::before{
+    content:"🔍";
+    position:absolute;
+    left:13px;
+    top:12px;
+    font-size:16px;
+  }
+  .btn-refresh{
+    background:var(--green);
+    color:#fff;
+    border:none;
+    padding:13px 18px;
+    border-radius:10px;
+    font-size:15px;
+    font-weight:600;
+    cursor:pointer;
+    white-space:nowrap;
+    display:flex;
+    align-items:center;
+    gap:8px;
+  }
+  .btn-refresh:hover{background:var(--green-dark);}
+  .btn-refresh:disabled{opacity:0.6;cursor:default;}
+  .status-line{
+    font-size:13px;
+    color:var(--muted);
+    margin:-6px 0 14px;
+  }
+
+  /* ---------- TABEL ALA SPREADSHEET ---------- */
+  .table-wrap{
+    background:#fff;
+    border:1px solid #b7b7b7;
+    border-radius:4px;
+    overflow-x:auto;
+    -webkit-overflow-scrolling:touch;
+  }
+  table.sheet{
+    border-collapse:collapse;
+    width:100%;
+    min-width:1150px;
+    font-size:13px;
+    font-family:Arial,Helvetica,sans-serif;
+  }
+  table.sheet thead th{
+    background:#f8f9fa;
+    color:#1a1a1a;
+    text-align:left;
+    padding:6px 8px;
+    font-weight:700;
+    white-space:nowrap;
+    border:1px solid #b7b7b7;
+    position:sticky;
+    top:0;
+  }
+  table.sheet tbody td{
+    padding:5px 8px;
+    border:1px solid #d0d0d0;
+    vertical-align:top;
+    white-space:nowrap;
+  }
+  table.sheet tbody td.wrap{
+    white-space:normal;
+    min-width:150px;
+  }
+  table.sheet tbody tr.row-data:hover{background:#eef7f0;}
+  td.be{font-weight:700;color:var(--green-dark);}
+  td.cn{color:var(--muted);font-size:12px;display:block;}
+
+  /* baris section (judul pemisah, mis. "PELABUHAN BESAR") */
+  tr.row-section td{
+    background:#0f7a3c;
+    color:#fff;
+    font-weight:700;
+    font-size:13.5px;
+    padding:7px 10px;
+    border:1px solid #0a5c2c;
+  }
+  /* baris header ulangan di tengah data */
+  tr.row-header td{
+    background:#dbe9df;
+    color:#0a5c2c;
+    font-weight:700;
+    border:1px solid #b7b7b7;
+  }
+
+  .scroll-hint{
+    font-size:12px;
+    color:var(--muted);
+    margin:6px 2px 12px;
+  }
+  .empty-state{
+    text-align:center;
+    padding:60px 20px;
+    color:var(--muted);
+  }
+  .loading{
+    text-align:center;
+    padding:40px;
+    color:var(--muted);
+  }
+  @media(max-width:520px){
+    .topbar h1{font-size:17px;}
+    .container{padding:14px;}
+  }
+</style>
+</head>
+<body>
+
+<!-- ===================== LOGIN SCREEN ===================== -->
+<div id="login-screen">
+  <div class="login-box">
+    <div class="icon">📦</div>
+    <h2>Barang Masuk</h2>
+    <p class="sub">Masuk untuk melihat data</p>
+    <div class="field">
+      <label for="username">Username</label>
+      <input id="username" type="text" autocomplete="username" placeholder="Username">
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" placeholder="Password">
+    </div>
+    <button class="btn-primary" id="btn-login">Masuk</button>
+    <p id="login-error">Username atau password salah.</p>
+  </div>
+</div>
+
+<!-- ===================== APP SCREEN ===================== -->
+<div id="app-screen">
+  <div class="topbar">
+    <h1>📦 Barang Masuk</h1>
+    <button id="btn-logout">Keluar</button>
+  </div>
+  <div class="container">
+    <div class="toolbar">
+      <div class="search-box">
+        <input id="search" type="text" placeholder="Cari kode BE atau nama barang...">
+      </div>
+      <button class="btn-refresh" id="btn-refresh">🔄 Refresh Data</button>
+    </div>
+    <div class="status-line" id="status-line">Memuat data...</div>
+    <div class="scroll-hint">👉 Geser tabel ke samping untuk lihat semua kolom</div>
+    <div id="list-container"></div>
+  </div>
+</div>
+
+<script>
+  // ---------- KONFIGURASI SUPABASE ----------
+  const SUPABASE_URL = "https://wctihclgcakqcjiagnzl.supabase.co";
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndjdGloY2xnY2FrcWNqaWFnbnpsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAwODc3ODksImV4cCI6MjEwNTY2Mzc4OX0.dwheQjxOoDbzIzlbCQ3wXY0qb7f5OQKkwBpcw9m5Gos";
+  const EMAIL_DOMAIN = "barangmasuk.local"; // username diubah jadi username@barangmasuk.local di belakang layar
+
+  const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  let allRows = [];
+
+  const loginScreen = document.getElementById('login-screen');
+  const appScreen = document.getElementById('app-screen');
+  const loginError = document.getElementById('login-error');
+
+  function esc(str){
+    if(str === null || str === undefined) return '';
+    return String(str).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  }
+
+  // ---------- LOGIN ----------
+  document.getElementById('btn-login').addEventListener('click', doLogin);
+  document.getElementById('password').addEventListener('keydown', e => { if(e.key === 'Enter') doLogin(); });
+
+  async function doLogin(){
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value;
+    if(!username || !password) return;
+    const btn = document.getElementById('btn-login');
+    btn.disabled = true;
+    btn.textContent = 'Memeriksa...';
+    loginError.style.display = 'none';
+
+    const email = username.toLowerCase() + '@' + EMAIL_DOMAIN;
+    const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+
+    btn.disabled = false;
+    btn.textContent = 'Masuk';
+
+    if(error){
+      loginError.style.display = 'block';
+      return;
+    }
+    showApp();
+  }
+
+  document.getElementById('btn-logout').addEventListener('click', async () => {
+    await supabaseClient.auth.signOut();
+    location.reload();
+  });
+
+  // ---------- CEK SESI SAAT BUKA HALAMAN ----------
+  async function init(){
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    if(session){
+      showApp();
+    }
+  }
+
+  function showApp(){
+    loginScreen.style.display = 'none';
+    appScreen.style.display = 'block';
+    loadData();
+  }
+
+  // ---------- LOAD DATA ----------
+  async function loadData(){
+    const statusLine = document.getElementById('status-line');
+    statusLine.textContent = 'Memuat data...';
+    const { data, error } = await supabaseClient
+      .from('barang_masuk')
+      .select('*')
+      .order('sheet_row_number', { ascending: true });
+
+    if(error){
+      statusLine.textContent = 'Gagal memuat data: ' + error.message;
+      return;
+    }
+    allRows = data || [];
+    renderList(allRows);
+    updateStatus();
+  }
+
+  function updateStatus(){
+    const statusLine = document.getElementById('status-line');
+    if(allRows.length === 0){
+      statusLine.textContent = 'Belum ada data.';
+      return;
+    }
+    const latest = allRows.reduce((a,b) => {
+      const ta = a.synced_at ? new Date(a.synced_at).getTime() : 0;
+      const tb = b.synced_at ? new Date(b.synced_at).getTime() : 0;
+      return tb > ta ? b : a;
+    });
+    const total = allRows.length;
+    let syncedText = '';
+    if(latest && latest.synced_at){
+      const d = new Date(latest.synced_at);
+      syncedText = ' • Terakhir sync: ' + d.toLocaleString('id-ID');
+    }
+    statusLine.textContent = total + ' data' + syncedText;
+  }
+
+  function renderList(rows){
+    const container = document.getElementById('list-container');
+    if(rows.length === 0){
+      container.innerHTML = '<div class="empty-state">Tidak ada data yang cocok.</div>';
+      return;
+    }
+    const bodyRows = rows.map(r => {
+      if(r.row_type === 'section'){
+        return `<tr class="row-section"><td colspan="12">${esc(r.be)}</td></tr>`;
+      }
+      if(r.row_type === 'header'){
+        return `
+          <tr class="row-header">
+            <td>${esc(r.be)}</td>
+            <td>${esc(r.marking)}</td>
+            <td>${esc(r.customer)}</td>
+            <td>${esc(r.description)}</td>
+            <td>${esc(r.ctns)}</td>
+            <td>${esc(r.m3)}</td>
+            <td>${esc(r.kgs)}</td>
+            <td>${esc(r.tanggal_masuk)}</td>
+            <td>${esc(r.total_value)}</td>
+            <td>${esc(r.partai)}</td>
+            <td>${esc(r.tiba_pelabuhan)}</td>
+            <td>${esc(r.catatan)}</td>
+          </tr>`;
+      }
+      return `
+        <tr class="row-data">
+          <td class="be">${esc(r.be) || '-'}</td>
+          <td>${esc(r.marking) || ''}</td>
+          <td class="wrap"><span class="cn">${esc(r.customer) || ''}</span></td>
+          <td class="wrap">${esc(r.description) || ''}</td>
+          <td${r.ctns_color ? ` style="background-color:${esc(r.ctns_color)}"` : ''}>${esc(r.ctns) || ''}</td>
+          <td${r.m3_color ? ` style="background-color:${esc(r.m3_color)}"` : ''}>${esc(r.m3) || ''}</td>
+          <td${r.kgs_color ? ` style="background-color:${esc(r.kgs_color)}"` : ''}>${esc(r.kgs) || ''}</td>
+          <td>${esc(r.tanggal_masuk) || ''}</td>
+          <td>${esc(r.total_value) || ''}</td>
+          <td>${esc(r.partai) || ''}</td>
+          <td class="wrap">${esc(r.tiba_pelabuhan) || ''}</td>
+          <td class="wrap">${esc(r.catatan) || ''}</td>
+        </tr>`;
+    }).join('');
+
+    container.innerHTML = `
+      <div class="table-wrap">
+        <table class="sheet">
+          <tbody>${bodyRows}</tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  // ---------- PENCARIAN ----------
+  document.getElementById('search').addEventListener('input', (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    if(!q){ renderList(allRows); return; }
+    const filtered = allRows.filter(r => {
+      return Object.values(r).some(v => String(v || '').toLowerCase().includes(q));
+    });
+    renderList(filtered);
+  });
+
+  // ---------- REFRESH MANUAL (panggil sync dari Google Sheet) ----------
+  document.getElementById('btn-refresh').addEventListener('click', async () => {
+    const btn = document.getElementById('btn-refresh');
+    const statusLine = document.getElementById('status-line');
+    btn.disabled = true;
+    btn.textContent = '🔄 Menyinkronkan...';
+    statusLine.textContent = 'Mengambil data terbaru dari Google Sheets...';
+
+    try{
+      const { data: { session } } = await supabaseClient.auth.getSession();
+      const res = await fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + session.access_token }
+      });
+      const result = await res.json();
+      if(!res.ok){
+        statusLine.textContent = 'Gagal sync: ' + (result.error || 'unknown error');
+      } else {
+        await loadData();
+      }
+    } catch(err){
+      statusLine.textContent = 'Gagal sync: ' + err.message;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '🔄 Refresh Data';
+    }
+  });
+
+  init();
+</script>
+</body>
+</html>
