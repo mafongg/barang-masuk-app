@@ -282,7 +282,7 @@
   const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndjdGloY2xnY2FrcWNqaWFnbnpsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAwODc3ODksImV4cCI6MjEwNTY2Mzc4OX0.dwheQjxOoDbzIzlbCQ3wXY0qb7f5OQKkwBpcw9m5Gos";
   const EMAIL_DOMAIN = "barangmasuk.local"; // username diubah jadi username@barangmasuk.local di belakang layar
 
-  const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
   let allRows = [];
 
@@ -309,7 +309,7 @@
     loginError.style.display = 'none';
 
     const email = username.toLowerCase() + '@' + EMAIL_DOMAIN;
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
 
     btn.disabled = false;
     btn.textContent = 'Masuk';
@@ -322,13 +322,13 @@
   }
 
   document.getElementById('btn-logout').addEventListener('click', async () => {
-    await supabase.auth.signOut();
+    await supabaseClient.auth.signOut();
     location.reload();
   });
 
   // ---------- CEK SESI SAAT BUKA HALAMAN ----------
   async function init(){
-    const { data: { session } } = await supabase.auth.getSession();
+    const { data: { session } } = await supabaseClient.auth.getSession();
     if(session){
       showApp();
     }
@@ -344,7 +344,7 @@
   async function loadData(){
     const statusLine = document.getElementById('status-line');
     statusLine.textContent = 'Memuat data...';
-    const { data, error } = await supabase
+    const { data, error } = await supabaseClient
       .from('barang_masuk')
       .select('*')
       .order('sheet_row_number', { ascending: false });
@@ -431,7 +431,7 @@
     statusLine.textContent = 'Mengambil data terbaru dari Google Sheets...';
 
     try{
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { session } } = await supabaseClient.auth.getSession();
       const res = await fetch('/api/sync', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + session.access_token }
