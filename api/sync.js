@@ -43,13 +43,15 @@ export default async function handler(req, res) {
     const accessToken = tokenResponse.token || tokenResponse;
 
     const sheetId = process.env.GOOGLE_SHEET_ID;
-    const range = process.env.GOOGLE_SHEET_RANGE || 'A1:M100000';
+    // Bisa lebih dari satu potongan range, dipisah koma, buat skip baris yang di-hide di sheet.
+    // Default: baris 1-2 (judul+header) + baris 274 dst (data yang kelihatan).
+    const rangesEnv = process.env.GOOGLE_SHEET_RANGES || process.env.GOOGLE_SHEET_RANGE || 'A1:M2,A274:M100000';
+    const ranges = rangesEnv.split(',').map((r) => r.trim()).filter(Boolean);
 
     // Satu API call aja yang ambil TEKS dan WARNA sekaligus per cell, biar index-nya
     // dijamin selalu sinkron (sebelumnya pakai 2 call terpisah dan itu bisa geser/salah pasang).
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}?ranges=${encodeURIComponent(
-      range
-    )}&fields=sheets.data.rowData.values(formattedValue,userEnteredFormat.backgroundColor),sheets.data.rowMetadata(hiddenByUser,hiddenByFilter)`;
+    const rangesQuery = ranges.map((r) => `ranges=${encodeURIComponent(r)}`).join('&');
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}?${rangesQuery}&fields=sheets.data.rowData.values(formattedValue,userEnteredFormat.backgroundColor)`;
 
     const sheetRes = await fetch(url, {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -61,12 +63,10 @@ export default async function handler(req, res) {
     }
 
     const sheetJson = await sheetRes.json();
-    const rowDataRaw = sheetJson.sheets?.[0]?.data?.[0]?.rowData || [];
-    const rowMetadataRaw = sheetJson.sheets?.[0]?.data?.[0]?.rowMetadata || [];
-
-    function isRowHidden(idx) {
-      const rm = rowMetadataRaw[idx];
-      return !!(rm && (rm.hiddenByUser || rm.hiddenByFilter));
+    const dataBlocks = sheetJson.sheets?.[0]?.data || [];
+    let rowDataRaw = [];
+    for (const block of dataBlocks) {
+      rowDataRaw = rowDataRaw.concat(block.rowData || []);
     }
 
     function cellText(cell) {
@@ -97,15 +97,15 @@ export default async function handler(req, res) {
     function classifyRow(row) {
       const colA = (row[0] || '').toString().trim();
       const restEmpty = row.slice(1, 12).every((v) => !v || v.toString().trim() === '');
-      if (colA && restEmpty) return 'section';
-      if (colA.toUpperCase() === 'BE') return 'header';
-      if (!colA) return 'empty';
-      return 'data';
+      if (!colA && restEmpty) return 'empty'; // beneran kosong semua
+      if (colA && restEmpty) return 'section'; // cuma kolom A ada isi = judul section
+      if (colA.toUpperCase() === 'BE') return 'header'; // baris header yang diulang
+      return 'data'; // termasuk baris lanjutan dari BE yang di-merge (BE kosong tapi kolom lain ada isi)
     }
 
     const records = rows
       .map((row, idx) => {
-        const rowType = isRowHidden(idx) ? 'empty' : classifyRow(row);
+        const rowType = classifyRow(row);
         const cells = rowDataRaw[idx]?.values || [];
         return {
           sheet_row_number: idx + 1,
